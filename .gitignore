@@ -1,0 +1,13 @@
+.env
+.venv
+__pycache__/
+*.py[cod]
+*.pkl
+*.joblib
+models/
+data/raw/
+data/processed/
+notebooks/.ipynb_checkpoints/
+.pytest_cache/
+dist/
+*.egg-info/
