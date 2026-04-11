@@ -1,11 +1,11 @@
+import os
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
-from sklearn.preprocessing import LabelEncoder
-import pickle
+import joblib
 
 
 FEATURE_COLUMNS = [
@@ -14,24 +14,25 @@ FEATURE_COLUMNS = [
     "return_path_differs",
     "from_has_numbers",
     "from_domain_length",
+    "from_display_name_mismatch",
     "url_count",
     "urls_with_ip",
     "urls_with_at_symbol",
-    "avg_url_length",
-    "max_url_length",
     "urls_with_redirect",
+    "urls_with_shortener",
     "urls_with_https",
     "urls_with_suspicious_tld",
+    "urls_subdomain_depth",
     "urgency_word_count",
     "has_html_body",
     "html_to_text_ratio",
     "body_length",
     "body_has_form",
     "body_has_script",
+    "body_has_hidden_elements",
     "spf_pass",
     "dkim_pass",
     "dmarc_pass",
-    "auth_score",
     "has_x_mailer",
     "attachment_count",
     "has_suspicious_attachment",
@@ -59,15 +60,20 @@ def train(data_path: Path, model_path: Path) -> dict:
     report = classification_report(y_test, y_pred, output_dict=True)
 
     model_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(model_path, "wb") as f:
-        pickle.dump(clf, f)
+    joblib.dump(clf, model_path)
 
     return report
 
 
 def load_model(model_path: Path) -> RandomForestClassifier:
-    with open(model_path, "rb") as f:
-        return pickle.load(f)
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model not found at {model_path}")
+
+    # Basic safety check before loading
+    if model_path.stat().st_size > 500 * 1024 * 1024:  # 500MB limit
+        raise ValueError("Model file is suspiciously large, refusing to load")
+
+    return joblib.load(model_path)
 
 
 def predict(features: dict, model_path: Path) -> dict:
