@@ -1,32 +1,20 @@
 # phish-detector
 
-> *Most phishing emails don't look suspicious. That's the point.*
+A tool that reads an email file and tells you if it's phishing or not.
 
-`phish-detector` is a command-line tool and API that analyzes `.eml` files and classifies them as phishing or legitimate using a machine learning classifier trained on real email data. It extracts behavioral and structural features from each email — sender anomalies, URL patterns, authentication headers, body signals — and runs them through a Random Forest model.
+It doesn't use rules someone wrote by hand. It was trained on real emails — thousands of legitimate ones from the Enron corpus and hundreds of phishing samples from the SpamAssassin corpus — and learned what separates them. Things like whether the sender domain matches the reply-to, whether there are links pointing to IP addresses instead of domain names, whether the email is trying to scare you into clicking something.
 
-Built as a portfolio project at the intersection of email security and applied ML.
-
----
-
-## What it detects
-
-- Brute-force phishing: mismatched domains, free providers impersonating brands, urgency language
-- URL-based attacks: IP addresses instead of domains, link shorteners, open redirects, suspicious TLDs
-- Header anomalies: SPF/DKIM/DMARC failures, display name mismatches
-- Structural signals: hidden HTML elements, embedded forms and scripts, suspicious attachments
-
-This detector handles common phishing patterns well. Sophisticated campaigns (compromised corporate accounts, clean domains, no attachments) require additional signals like text embeddings and domain reputation — noted in the roadmap.
+It's not perfect. A well-crafted phishing email from a compromised corporate account with a clean link will probably pass. That's a known limitation and it's in the roadmap.
 
 ---
 
-## Requirements
+## What it looks at
 
-- Python 3.11+
-- [uv](https://docs.astral.sh/uv/)
-
-Optional for enrichment:
-- AbuseIPDB API key
-- VirusTotal API key
+- Who sent it and whether the reply-to points somewhere else
+- The URLs — are any of them IP addresses, shorteners, or redirects in disguise
+- Whether SPF, DKIM, and DMARC passed
+- Words that create urgency or fear
+- Hidden elements, embedded forms, suspicious attachments
 
 ---
 
@@ -36,179 +24,122 @@ Optional for enrichment:
 git clone https://github.com/<your-username>/phish-detector.git
 cd phish-detector
 
-uv venv && source .venv/bin/activate  # on Windows: .venv\Scripts\activate
+uv venv && source .venv/bin/activate  # Windows: .venv\Scripts\activate
 uv pip install -e ".[dev]"
 
 cp .env.example .env
-# Add your API keys to .env
+```
+
+If you want URL and IP enrichment, add your keys to `.env`:
+```
+ABUSEIPDB_API_KEY=
+VIRUSTOTAL_API_KEY=
 ```
 
 ---
 
-## Training the model
+## Training
 
-You need two folders of raw emails — one phishing, one legitimate.
+You need emails. Two folders — one phishing, one legitimate.
 
-**Recommended datasets:**
+Good sources:
 - Legitimate: [Enron corpus](https://www.cs.cmu.edu/~enron/enron_mail_20150507.tar.gz)
 - Phishing: [SpamAssassin corpus](https://spamassassin.apache.org/old/publiccorpus/)
 
-Place emails in:
-```
-data/raw/phishing/
-data/raw/legitimate/
-```
-
-Then build the dataset and train:
+Drop them in `data/raw/phishing/` and `data/raw/legitimate/`, then:
 
 ```bash
-# Build feature CSV from raw emails
 uv run python build_dataset.py data/raw/phishing data/raw/legitimate data/processed/dataset.csv
-
-# Train the classifier
 uv run python src/phish_detector/cli.py train data/processed/dataset.csv
 ```
 
 ---
 
-## Usage
+## Using it
 
-### CLI
+### From the terminal
 
 ```bash
-# Analyze a single email
+# analyze an email
 phish-detector analyze path/to/email.eml
 
-# Analyze with AbuseIPDB + VirusTotal enrichment
+# with external enrichment (AbuseIPDB + VirusTotal)
 phish-detector analyze path/to/email.eml --enrich
-
-# Use a custom model path
-phish-detector analyze path/to/email.eml --model-path models/custom.joblib
-
-# Train the model
-phish-detector train data/processed/dataset.csv
 ```
 
-### API
+### As an API
 
 ```bash
-# Start the API server
 uvicorn phish_detector.api:app --reload
 ```
 
-Then send a request:
-
 ```bash
-curl -X POST http://localhost:8000/analyze \
-  -F "file=@path/to/email.eml"
-```
+# single email
+curl -X POST http://localhost:8000/analyze -F "file=@email.eml"
 
-With enrichment:
-
-```bash
-curl -X POST "http://localhost:8000/analyze?enrich=true" \
-  -F "file=@path/to/email.eml"
-```
-
-Batch analysis (up to 20 files):
-
-```bash
+# up to 20 at once
 curl -X POST http://localhost:8000/analyze/batch \
-  -F "files=@email1.eml" \
-  -F "files=@email2.eml"
+  -F "files=@email1.eml" -F "files=@email2.eml"
 ```
+
+The API exists so other systems can send emails for analysis without touching the CLI — useful if you want to plug this into a mail server or a larger pipeline.
 
 ---
 
 ## Example output
 
 ```
-Verdict
-┌─────────────────────────────┐
-│         PHISHING            │
-│   Confidence: 94.2%         │
-└─────────────────────────────┘
+╭──────────────╮
+│   PHISHING   │
+│  94.2% sure  │
+╰──────────────╯
 
-Extracted features
 ╭──────────────────────────────┬───────╮
-│ Feature                      │ Value │
-├──────────────────────────────┼───────┤
-│ urgency_word_count           │ 4     │
+│ reply_to_differs_from        │ 1     │
 │ urls_with_ip                 │ 1     │
 │ urls_with_shortener          │ 2     │
-│ reply_to_differs_from        │ 1     │
+│ urgency_word_count           │ 4     │
 │ spf_pass                     │ 0     │
-│ dkim_pass                    │ 0     │
 │ body_has_form                │ 1     │
-│ has_suspicious_attachment    │ 0     │
 ╰──────────────────────────────┴───────╯
 ```
 
 ---
 
-## How it works
+## Stack
 
-**Parsing** — the `.eml` file is read and split into structured fields: sender, headers, body (plain and HTML), URLs, and attachments.
-
-**Feature extraction** — each field is converted into numerical features the model can use. This includes sender domain analysis, URL pattern detection (IP addresses, shorteners, open redirects, suspicious TLDs), authentication header checks (SPF, DKIM, DMARC), body signals (urgency words, hidden elements, embedded forms), and attachment analysis.
-
-**Classification** — a Random Forest classifier trained on real email data predicts the probability of phishing. The model outputs a verdict and a confidence score.
-
-**Enrichment (optional)** — flagged URLs are checked against VirusTotal. IP addresses are checked against AbuseIPDB for abuse history.
+`scikit-learn` for the model, `joblib` for serialization (not pickle — it's a known attack vector), `beautifulsoup4` for HTML parsing, `fastapi` for the API, `typer` and `rich` for the CLI.
 
 ---
 
-## Project structure
+## Structure
 
 ```
 phish-detector/
-├── data/
-│   ├── raw/
-│   │   ├── phishing/       # raw phishing emails
-│   │   └── legitimate/     # raw legitimate emails
-│   └── processed/          # generated CSV dataset
+├── data/raw/           # your email files go here
+├── data/processed/     # generated dataset CSV
 ├── src/phish_detector/
-│   ├── parser.py           # .eml parsing
-│   ├── features.py         # feature extraction
-│   ├── model.py            # training and prediction
-│   ├── integrations.py     # AbuseIPDB + VirusTotal
-│   ├── cli.py              # command-line interface
-│   └── api.py              # FastAPI REST API
-├── tests/
-├── build_dataset.py        # builds CSV from raw emails
-└── README.md
+│   ├── parser.py       # reads the .eml
+│   ├── features.py     # turns it into numbers
+│   ├── model.py        # trains and predicts
+│   ├── integrations.py # AbuseIPDB + VirusTotal
+│   ├── cli.py          # terminal interface
+│   └── api.py          # REST API
+└── build_dataset.py    # generates the CSV from raw emails
 ```
 
 ---
 
-## Tech stack
+## Limitations
 
-| Tool | Role |
-|---|---|
-| `scikit-learn` | Random Forest classifier |
-| `joblib` | Safe model serialization |
-| `beautifulsoup4` | HTML parsing and URL extraction |
-| `fastapi` + `uvicorn` | REST API |
-| `typer` + `rich` | CLI and terminal output |
-| `requests` | AbuseIPDB and VirusTotal integration |
-| `python-dotenv` | Environment variable management |
-
----
-
-## Known limitations
-
-- Trained on Enron (2001-2002) and SpamAssassin (2003) data — modern sophisticated campaigns may evade detection
-- No text embeddings or semantic analysis — the model doesn't understand what the email says, only its structure
-- Single-run training — no persistent model updates between analyses
-- IPv6 and encoded IP formats are detected but not fully normalized
+The model was trained on data from 2001-2003. It catches the obvious stuff. A modern campaign that uses a clean domain, no attachments, and a legitimate-looking sender will probably get through. The roadmap includes text embeddings and domain reputation checks to close that gap.
 
 ---
 
 ## Roadmap
 
-- **Text embeddings** — use a sentence transformer to capture semantic phishing signals beyond keyword matching
-- **DOM analysis** — parse the full HTML structure to detect hidden elements, pixel trackers, and form targets
-- **Domain reputation** — integrate WHOIS age checks and domain reputation APIs
-- **Cross-email correlation** — detect coordinated campaigns across multiple emails
-- **Real-time mode** — monitor a maildir and alert on new suspicious emails
-- **JSON export** — structured output for SIEM integration
+- Semantic analysis with sentence transformers — understand what the email is actually saying
+- DOM analysis — look at the full HTML structure, not just whether a form tag exists
+- Domain age and reputation checks via WHOIS
+- Incremental training — update the model without retraining from scratch
+- JSON export for SIEM integration
